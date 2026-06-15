@@ -1,0 +1,36 @@
+#!/usr/bin/env node
+// JARVIS browser CLI — relays a command to the local JARVIS browser endpoint.
+// Usage: jb <action> [arg1] [arg2...]
+//   jb goto https://google.com
+//   jb read
+//   jb click "text=Accedi"
+//   jb type "input[name=q]" "gatti"
+//   jb press Enter
+const [, , action, arg1, ...rest] = process.argv;
+const arg2 = rest.length ? rest.join(" ") : undefined;
+const PORT = process.env.JARVIS_PORT || process.env.PORT || "8787";
+
+if (!action) {
+  console.error("usage: jb <goto|read|links|click|type|press|scroll|back|state> [args]");
+  process.exit(1);
+}
+
+try {
+  const res = await fetch(`http://localhost:${PORT}/api/browser`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, arg1, arg2 }),
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    console.error("browser error:", data.error ?? "unknown");
+    process.exit(1);
+  }
+  // Print a compact human/agent-readable summary.
+  if (data.title || data.url) console.log(`[${data.title ?? ""}] ${data.url ?? ""}`.trim());
+  if (data.text) console.log(data.text);
+  if (!data.text && !data.title && !data.url) console.log("ok");
+} catch (e) {
+  console.error("cannot reach JARVIS browser endpoint:", e?.message ?? e);
+  process.exit(1);
+}

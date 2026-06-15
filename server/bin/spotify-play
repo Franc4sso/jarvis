@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Launch the Spotify DESKTOP app (Windows) and search/play a query, from WSL.
+# Usage: spotify-play "il trenino"
+# Optional flag "--tile": snap JARVIS to the left half and Spotify to the right
+# half of the primary monitor, then auto-play the top search result.
+query="${*:-}"
+tile=0
+case "$query" in
+  *" --tile") tile=1; query="${query% --tile}";;
+  "--tile") tile=1; query="";;
+esac
+# URL-encode spaces minimally (Spotify URIs accept %20)
+enc="${query// /%20}"
+
+# If the query is already a Spotify URI/link, play that track directly (no search,
+# no auto-click — the desktop app starts playback immediately).
+uri=""
+case "$query" in
+  spotify:track:*) uri="$query";;
+  spotify:*) uri="$query";;
+  https://open.spotify.com/*track/*|http://open.spotify.com/*track/*)
+    # Extract the 22-char track id from a share link (handles /intl-xx/ and ?si=).
+    id="${query##*track/}"; id="${id%%\?*}"; id="${id%%/*}"
+    [ -n "$id" ] && uri="spotify:track:${id}";;
+esac
+
+# Run from a Windows path to avoid the UNC working-dir warning.
+cd /mnt/c 2>/dev/null || true
+if [ -n "$uri" ]; then
+  cmd.exe /c start "" "$uri" >/dev/null 2>&1
+  echo "opened Spotify app, playing: ${uri}"
+elif [ -n "$enc" ]; then
+  cmd.exe /c start "" "spotify:search:${enc}" >/dev/null 2>&1
+  echo "opened Spotify app, search: ${query}"
+else
+  cmd.exe /c start "" "spotify:" >/dev/null 2>&1
+  echo "opened Spotify app"
+fi
+
+if [ "$tile" = "1" ]; then
+  # autoclick=1 only when we did a search (need to start the top result);
+  # for a direct URI the track is already playing, so skip the click.
+  autoclick=1; [ -n "$uri" ] && autoclick=0
+  export SP_AUTOCLICK="$autoclick"
+  WSLENV="${WSLENV}:SP_AUTOCLICK" powershell.exe -NoProfile -Command '
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win {
+  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h,int x,int y,int w,int t,bool r);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int c);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(int f,int x,int y,int d,int e);
+}
+"@
+    Add-Type -AssemblyName System.Windows.Forms
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $half = [int]($wa.Width/2)
+    $restore = 9
+    $LEFTDOWN = 0x02; $LEFTUP = 0x04
+
+    function Get-Spotify {
+      Get-Process -Name Spotify -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -ne "" } |
+        Select-Object -First 1
+    }
+
+    # 1) Tile JARVIS left (browser window titled J.A.R.V.I.S.).
+    $jarvis = Get-Process | Where-Object { $_.MainWindowTitle -match "J\.?A\.?R\.?V\.?I\.?S" } | Select-Object -First 1
+    if ($jarvis) {
+      [Win]::ShowWindow($jarvis.MainWindowHandle,$restore) | Out-Null
+      [Win]::MoveWindow($jarvis.MainWindowHandle,$wa.X,$wa.Y,$half,$wa.Height,$true) | Out-Null
+    }
+
+    # 2) Wait (poll up to ~8s) for the Spotify window to actually exist, then tile right.
+    $spot = $null
+    for ($i = 0; $i -lt 40; $i++) {
+      $spot = Get-Spotify
+      if ($spot) { break }
+      Start-Sleep -Milliseconds 200
+    }
+    if (-not $spot) { exit 0 }
+
+    $sx = $wa.X + $half
+    $sw = $wa.Width - $half
+    [Win]::ShowWindow($spot.MainWindowHandle,$restore) | Out-Null
+    [Win]::MoveWindow($spot.MainWindowHandle,$sx,$wa.Y,$sw,$wa.Height,$true) | Out-Null
+    [Win]::SetForegroundWindow($spot.MainWindowHandle) | Out-Null
+
+    # 3) Auto-play the top result ONLY when we did a text search. For a direct
+    #    spotify:track: URI the song is already playing, so we skip the click.
+    if ($env:SP_AUTOCLICK -eq "1") {
+      Start-Sleep -Milliseconds 2600
+      [Win]::SetForegroundWindow($spot.MainWindowHandle) | Out-Null
+      $cx = $sx + [int]($sw * 0.45)        # ~middle-left of the results pane
+      $cy = $wa.Y + [int]($wa.Height * 0.30) # first result row
+      [Win]::SetCursorPos($cx,$cy) | Out-Null
+      Start-Sleep -Milliseconds 150
+      [Win]::mouse_event($LEFTDOWN,0,0,0,0); [Win]::mouse_event($LEFTUP,0,0,0,0)
+      Start-Sleep -Milliseconds 120
+      [Win]::mouse_event($LEFTDOWN,0,0,0,0); [Win]::mouse_event($LEFTUP,0,0,0,0)
+    }
+  ' >/dev/null 2>&1
+  echo "tiled JARVIS left / Spotify right"
+fi
