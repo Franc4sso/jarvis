@@ -21,6 +21,8 @@ interface JarvisState {
   partyTick: number;
   /** bumped to trigger the robotic wake activation effect ("ehi jarvis") */
   wakeTick: number;
+  /** URL currently embedded in the in-UI site frame, or null when closed */
+  embedUrl: string | null;
 
   setBooted: (b: boolean) => void;
   setMode: (m: ReactorMode) => void;
@@ -28,6 +30,7 @@ interface JarvisState {
   setSessionId: (id: string | null) => void;
   triggerParty: () => void;
   triggerWake: () => void;
+  setEmbedUrl: (url: string | null) => void;
 
   addTurn: (turn: ChatTurn) => void;
   appendToLast: (text: string) => void;
@@ -45,6 +48,7 @@ export const useJarvis = create<JarvisState>((set) => ({
   sessionId: null,
   partyTick: 0,
   wakeTick: 0,
+  embedUrl: null,
 
   setBooted: (b) => set({ booted: b, reactorMode: b ? "idle" : "boot" }),
   setMode: (m) => set({ reactorMode: m }),
@@ -52,6 +56,7 @@ export const useJarvis = create<JarvisState>((set) => ({
   setSessionId: (id) => set({ sessionId: id }),
   triggerParty: () => set((s) => ({ partyTick: s.partyTick + 1 })),
   triggerWake: () => set((s) => ({ wakeTick: s.wakeTick + 1 })),
+  setEmbedUrl: (url) => set({ embedUrl: url }),
 
   addTurn: (turn) => set((s) => ({ turns: [...s.turns, turn] })),
   appendToLast: (text) =>

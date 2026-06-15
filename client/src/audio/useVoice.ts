@@ -5,9 +5,16 @@ const getCtor = () =>
 
 export const voiceSupported = () => getCtor() !== null;
 
-// Wake phrase: "ehi jarvis" (+ common mishearings of "jarvis").
-const WAKE =
-  /\b(ehi|ei|hey|hei|ok|okay|e)\s+(jarvis|jervis|giarvis|giarvis|garvis|jarviz|jarvi|service)\b/i;
+// Wake phrase: "ehi jarvis" (+ the many ways it-IT speech recognition mangles
+// "jarvis"). We match the "jarvis" token loosely; an optional "ehi/hey/ok"
+// prefix is allowed but NOT required, so just saying "jarvis" wakes it too.
+// Punctuation/extra spaces between the words are tolerated.
+const JARVIS = /(j|g|gi|già|g ?i)[aàeèìi]?[rl]?v[iì]?[sxz]|jervis|service|charvis|giarvi[sxz]?/i;
+const PREFIX = /(?:\b(ehi|ei|hey|hei|eh|ok|okay|oi|e)\b[\s,]*)?/i;
+const WAKE = new RegExp(PREFIX.source + "(?:" + JARVIS.source + ")", "i");
+
+// quick self-doc of intended matches: "ehi jarvis", "ei giarvis", "jarvis",
+// "ehi, jarvis", "okay jervis", "giarvix" ...
 
 interface Opts {
   enabled: boolean;
@@ -133,14 +140,23 @@ export function useVoice({ enabled, onWake, onCommand, onInterim, onSleep, lang 
         }, 200);
       }
     };
-    rec.onerror = () => {
-      /* onend handles restart */
+    rec.onerror = (ev: any) => {
+      // Make failures visible — silent swallowing hid why wake stopped working.
+      // eslint-disable-next-line no-console
+      console.warn("[useVoice] recognition error:", ev?.error);
+      // Mic permission denied / blocked is fatal: stop trying to restart so we
+      // don't spin. The user must grant mic access (and use https/localhost).
+      if (ev?.error === "not-allowed" || ev?.error === "service-not-allowed") {
+        wantRef.current = false;
+      }
+      // 'no-speech' / 'aborted' / 'network' are transient → onend restarts.
     };
 
     try {
       rec.start();
-    } catch {
-      /* ignore */
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[useVoice] initial start failed:", e);
     }
 
     return () => {

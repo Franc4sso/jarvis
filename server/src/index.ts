@@ -52,6 +52,24 @@ Regole:
     jb read
   poi rispondi: "Ecco i risultati per gatti, signore."
 
+APRIRE/VISUALIZZARE UN SITO (incorporato nella UI, NON in una scheda nuova):
+- Quando l'utente vuole semplicemente ANDARE SU / APRIRE / VEDERE un sito
+  (es. "vai su wikipedia", "aprimi youtube", "fammi vedere il sito X"), NON usare
+  jb e NON aprire schede: emetti la direttiva [EMBED: <url completo>] una sola volta.
+  Il sito verrà mostrato incorniciato dentro l'interfaccia di JARVIS.
+  Esempio: utente "vai su wikipedia" -> rispondi: "Apro Wikipedia, signore. [EMBED: https://www.wikipedia.org]"
+- Usa SEMPRE un URL completo con https://. Se l'utente dà solo un nome, deduci l'URL
+  ufficiale (es. "youtube" -> https://www.youtube.com).
+- VIDEO YOUTUBE: NON usare MAI jb per cercare video (aprirebbe una finestra Chrome
+  separata). Per far vedere un video da parole chiave, emetti la direttiva di ricerca:
+  [EMBED: yt-search:<parole chiave>]
+  Il server troverà il primo video reale e lo riprodurrà dentro la cornice.
+  Esempio: "fammi vedere un video di gatti" -> "Ecco i gatti, signore. [EMBED: yt-search:gatti divertenti]"
+  Esempio: "metti Stairway to Heaven" -> "Subito, signore. [EMBED: yt-search:Stairway to Heaven Led Zeppelin]"
+  Se invece conosci GIÀ l'id esatto del video, usa [EMBED: https://www.youtube.com/embed/<ID>?autoplay=1].
+- Usa jb (sopra) SOLO quando devi leggere/cliccare/automatizzare la pagina, non per
+  la semplice visualizzazione.
+
 VOCE (TTS) — IMPORTANTE:
 - DEFAULT: NON parlare. Rispondi solo in testo a schermo. Niente feedback audio
   quando esegui un'azione (aprire siti, musica, festa, navigazione, ecc.).
@@ -71,12 +89,12 @@ MUSICA (app Spotify desktop, NON la pagina web):
 
 MODALITÀ FESTA:
 - Se l'utente dice "facciamo festa" (o simili: "festa!", "party"), allora:
-  1. lancia i coriandoli includendo la direttiva [PARTY] nella risposta;
-  2. fai partire "La Danza della Panza" eseguendo col tool Bash:
-     spotify-play "spotify:track:7GvCDhqL17l7IrjIcYhRQ9 --tile"
-     (URI diretto = play immediato; --tile mette Spotify a destra e JARVIS a sinistra)
-  3. rispondi UNA frase tipo: "Si parte, signore. [PARTY]".
-- Metti la direttiva [PARTY] una sola volta, nella frase di risposta.`;
+  1. fai partire da YOUTUBE la canzone "Bomba" di King Africa, incorniciata in JARVIS,
+     emettendo: [EMBED: https://www.youtube.com/embed/kRslNQgxKR4?autoplay=1]
+     (NON usare Spotify, NON usare spotify-play);
+  2. lancia i coriandoli includendo la direttiva [PARTY];
+  3. rispondi UNA frase tipo: "Si balla, signore. [PARTY] [EMBED: https://www.youtube.com/embed/kRslNQgxKR4?autoplay=1]".
+- Metti ciascuna direttiva una sola volta, nella frase di risposta.`;
 
 const app = express();
 app.use(cors());
@@ -102,18 +120,31 @@ interface RunResult {
   sessionNotFound?: boolean;
 }
 
-// Detect [OPEN: url], [PARTY] and [SPEAK] directives, return cleaned text + actions.
+// Detect [OPEN: url], [EMBED: url], [PARTY] and [SPEAK] directives.
 const OPEN_RE = /\[OPEN:\s*([^\]]+)\]/gi;
+const EMBED_RE = /\[EMBED:\s*([^\]]+)\]/gi;
 const PARTY_RE = /\[PARTY\]/gi;
 const SPEAK_RE = /\[SPEAK\]/gi;
-function extractActions(text: string): { clean: string; urls: string[]; party: boolean; speak: boolean } {
+function extractActions(text: string): {
+  clean: string;
+  urls: string[];
+  embeds: string[];
+  party: boolean;
+  speak: boolean;
+} {
   const urls: string[] = [];
+  const embeds: string[] = [];
   let party = false;
   let speak = false;
   const clean = text
     .replace(OPEN_RE, (_m, url) => {
       const u = String(url).trim();
       if (u) urls.push(u);
+      return "";
+    })
+    .replace(EMBED_RE, (_m, url) => {
+      const u = String(url).trim();
+      if (u) embeds.push(u);
       return "";
     })
     .replace(PARTY_RE, () => {
@@ -126,7 +157,83 @@ function extractActions(text: string): { clean: string; urls: string[]; party: b
     })
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return { clean, urls, party, speak };
+  return { clean, urls, embeds, party, speak };
+}
+
+const YT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120",
+  "Accept-Language": "it-IT,it",
+};
+
+/** Scrape the search results page for up to `n` candidate video ids, in order. */
+async function youtubeSearchIds(query: string, n = 8): Promise<string[]> {
+  try {
+    const u = "https://www.youtube.com/results?search_query=" + encodeURIComponent(query);
+    const html = await (await fetch(u, { headers: YT_HEADERS })).text();
+    const ids: string[] = [];
+    const re = /"videoId":"([\w-]{11})"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) && ids.length < n) {
+      if (!ids.includes(m[1])) ids.push(m[1]);
+    }
+    return ids;
+  } catch {
+    return [];
+  }
+}
+
+/** True if the video allows embedding (owner hasn't disabled it). */
+async function isEmbeddable(id: string): Promise<boolean> {
+  try {
+    const html = await (await fetch("https://www.youtube.com/watch?v=" + id, { headers: YT_HEADERS })).text();
+    // playableInEmbed:false (or absent + status not OK) => owner disabled embed.
+    const flag = html.match(/"playableInEmbed":(true|false)/);
+    if (flag) return flag[1] === "true";
+    return /"status":"OK"/.test(html);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the first EMBEDDABLE YouTube video id for a query. Famous songs (e.g.
+ * Gigi D'Agostino) often have the top result's embedding disabled by the label,
+ * which shows player error 150/153 — so we skip those and pick the first one
+ * that actually allows embedding. No API key, no headless browser.
+ */
+async function youtubeFirstId(query: string): Promise<string | null> {
+  const ids = await youtubeSearchIds(query, 8);
+  if (!ids.length) return null;
+  for (const id of ids) {
+    if (await isEmbeddable(id)) return id;
+  }
+  return ids[0]; // fallback: nothing verified embeddable, return top result
+}
+
+/**
+ * Turn an emitted embed URL into something that actually renders in an iframe.
+ * - "yt-search:QUERY" or a deprecated listType=search embed → resolve to a real
+ *   /embed/<id> (YouTube killed the search-embed; it shows a player error).
+ * Anything else is returned unchanged.
+ */
+async function resolveEmbed(url: string): Promise<string> {
+  // explicit search directive
+  if (url.startsWith("yt-search:")) {
+    const id = await youtubeFirstId(url.slice("yt-search:".length).trim());
+    return id ? `https://www.youtube.com/embed/${id}?autoplay=1` : url;
+  }
+  // legacy/broken search-embed form → extract the query and resolve a real id
+  try {
+    const u = new URL(url);
+    if (u.hostname.replace(/^www\./, "").endsWith("youtube.com") && u.searchParams.get("listType") === "search") {
+      const q = u.searchParams.get("list") || "";
+      const id = await youtubeFirstId(q.replace(/\+/g, " "));
+      if (id) return `https://www.youtube.com/embed/${id}?autoplay=1`;
+    }
+  } catch {
+    /* leave as-is */
+  }
+  return url;
 }
 
 /** Spawn the Claude Code CLI once. Streams text deltas via `send`. */
@@ -279,9 +386,13 @@ app.post("/api/chat", async (req, res) => {
     return;
   }
 
-  // Pull any [OPEN: url] / [PARTY] / [SPEAK] directives out of the final text → actions.
-  const { clean, urls, party, speak } = extractActions(result.text);
+  // Pull any [OPEN] / [EMBED] / [PARTY] / [SPEAK] directives out → action events.
+  const { clean, urls, embeds, party, speak } = extractActions(result.text);
   for (const url of urls) send("action", { type: "open", url });
+  for (const url of embeds) {
+    const resolved = await resolveEmbed(url);
+    send("action", { type: "embed", url: resolved });
+  }
   if (party) send("action", { type: "party" });
   if (speak) send("action", { type: "speak" });
 

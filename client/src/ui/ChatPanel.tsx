@@ -7,7 +7,7 @@ import { useMicAnalyser } from "../audio/useMicAnalyser";
 import { useVoice, voiceSupported } from "../audio/useVoice";
 
 export function ChatPanel() {
-  const { turns, addTurn, appendToLast, finishLast, setMode, setSessionId, triggerParty, triggerWake } = useJarvis();
+  const { turns, addTurn, appendToLast, finishLast, setMode, setSessionId, triggerParty, triggerWake, setEmbedUrl } = useJarvis();
   const [draft, setDraft] = useState("");
   const [listening, setListening] = useState(false);
   const sending = useRef(false);
@@ -62,6 +62,8 @@ export function ChatPanel() {
             }
           } else if (a.type === "party") {
             triggerParty();
+          } else if (a.type === "embed" && a.url) {
+            setEmbedUrl(a.url);
           } else if (a.type === "speak") {
             speakNextRef.current = true;
           }
